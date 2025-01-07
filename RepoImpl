@@ -1,0 +1,188 @@
+package com.katto.auth.data.remote.repository
+
+import android.util.Log
+import com.katto.auth.data.remote.AuthApi
+import com.katto.auth.data.remote.model.login.LoginPayload
+import com.katto.auth.data.remote.model.setup.AddProfilePayload
+import com.katto.auth.data.remote.model.verify.VerifyOtpPayload
+import com.katto.auth.domain.auth.UserInfo
+import com.katto.auth.domain.repository.AuthRepository
+import com.katto.auth.domain.repository.LocalStorageManager
+import com.katto.auth.mappers.toUserInfo
+import com.katto.core.data.jsonToErrorResponse
+import com.katto.core.data.parser.JsonParser
+import com.katto.core.domain.Gender
+import com.katto.core.domain.util.Resource
+import com.katto.core.utils.Messages
+import javax.inject.Inject
+
+class AuthRepositoryImpl @Inject constructor(
+    private val jsonParser: JsonParser,
+    private val api: AuthApi,
+    private val localStorageManager: LocalStorageManager,
+) : AuthRepository {
+    override suspend fun sendOtp(
+        phone: String, countryCode: String
+    ): Resource<Nothing> {
+        return try {
+            val response = api.login(
+                LoginPayload(
+                    phone = phone, countryCode = countryCode
+                )
+            )
+            val data = response.body()
+
+            when {
+                (data == null || !response.isSuccessful) -> {
+                    val errorBody = response.errorBody()
+                    val error = errorBody?.jsonToErrorResponse(jsonParser)
+                    Resource.Error(message = error?.msg ?: Messages.SOMETHING_WENT_WRONG, data = null)
+                }
+
+                else -> {
+                    Resource.Success(data = null)
+                }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+    override suspend fun verifyOtp(
+        phone: String, otp: String
+    ): Resource<UserInfo> {
+        return try {
+            val response = api.verifyOtp(
+                VerifyOtpPayload(
+                    phone = phone, otp = otp
+                )
+            )
+
+            val data = response.body()
+            when {
+                data == null || !response.isSuccessful -> {
+                    val errorBody = response.errorBody()
+                    val error = errorBody?.jsonToErrorResponse(jsonParser)
+                    Resource.Error(message = error?.msg ?: Messages.SOMETHING_WENT_WRONG, data = null)
+                }
+
+                data.data == null -> {
+                    Resource.Error(message = data.msg ?: Messages.SOMETHING_WENT_WRONG, data = null)
+                }
+
+                else -> {
+                    //Otp verified
+                    val userInfo = data.data.toUserInfo()
+                    localStorageManager.saveUser(userInfo)
+                    Log.d(
+                        "okhttp", "token: " +
+                                data.data.token
+                    )
+                    localStorageManager.setToken(data.data.token!!)
+                    Log.d(
+                        "okhttp", "verifyOtp: " +
+                                localStorageManager.getToken()
+                    )
+                    Resource.Success(data = userInfo)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+    override suspend fun addDetails(
+        userId: Int,
+        name: String,
+        email: String?,
+        address: String?,
+        gender: Gender?
+    ): Resource<UserInfo> {
+        return try {
+            val response = api.addProfileDetail(
+                userId = userId, addProfilePayload = AddProfilePayload(
+                    name = name, email = email, address = address, gender = gender?.value.toString()
+                )
+            )
+
+            val data = response.body()
+
+
+            when {
+                data == null || !response.isSuccessful -> {
+                    val errorBody = response.errorBody()
+                    val error = errorBody?.jsonToErrorResponse(jsonParser)
+                    Resource.Error(message = error?.msg ?: Messages.SOMETHING_WENT_WRONG, data = null)
+                }
+
+                data.data == null -> {
+                    Resource.Error(message = data.msg ?: Messages.SOMETHING_WENT_WRONG, data = null)
+                }
+
+
+                else -> {
+                    val data = data.data
+                    localStorageManager.saveUserName(
+                        userName = data.name!!,
+                        userEmail = data.email!!
+                    )
+                    Resource.Success()
+                }
+
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+    override suspend fun addDetails(
+        name: String,
+        email: String?,
+        address: String?,
+        gender: Gender?
+    ): Resource<UserInfo> {
+        return try {
+            val userId = localStorageManager.getUserId()!!
+            val response = api.addProfileDetail(
+                userId = userId, addProfilePayload = AddProfilePayload(
+                    name = name, email = email, address = address, gender = gender?.value.toString()
+                )
+            )
+
+            val data = response.body()
+
+
+            when {
+                data == null || !response.isSuccessful -> {
+                    val errorBody = response.errorBody()
+                    val error = errorBody?.jsonToErrorResponse(jsonParser)
+                    Resource.Error(message = error?.msg ?: Messages.SOMETHING_WENT_WRONG, data = null)
+                }
+
+                data.data == null -> {
+                    Resource.Error(message = data.msg ?: Messages.SOMETHING_WENT_WRONG, data = null)
+                }
+
+
+                else -> {
+                    val data = data.data
+                    localStorageManager.saveUserName(
+                        userName = data.name!!,
+                        userEmail = data.email!!
+                    )
+                    Resource.Success()
+                }
+
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+}
