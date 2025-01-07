@@ -1,0 +1,100 @@
+package com.katto.booking.presentation.home
+
+
+import com.katto.booking.domain.home.MapState
+import com.katto.booking.domain.location.model.Location
+import com.katto.booking.presentation.home.components.RideDataState
+import com.katto.booking.presentation.home.components.booking_confirm.BookingConfirmBsState
+import com.katto.booking.presentation.home.components.cancel_ride.CancelRideBsState
+import com.katto.booking.presentation.home.components.choose_ride.ChooseRideBsState
+import com.katto.booking.presentation.home.components.ride_end.RideEndedBsState
+import com.katto.booking.presentation.home.components.ride_for.RideForState
+import com.katto.booking.presentation.home.components.ride_payment.RidePaymentModeBsState
+import com.katto.booking.presentation.home.components.ride_rating.RateRideBsState
+import com.katto.booking.presentation.home.components.ride_started.RideStartedBsState
+import com.katto.booking.presentation.home.components.search_destination.SearchDestinationBsState
+import com.katto.booking.presentation.home.navigation.HomeBSNavigation
+import com.katto.booking.presentation.home.navigation.HomeSecondaryBSNavigation
+import com.katto.chat.data.remote.model.ChatMessage
+import com.katto.chat.data.remote.model.Connection
+import com.katto.payment.domain.model.CouponCode
+import com.katto.payment.domain.model.PaymentMethods
+import com.katto.place.domain.destination.Address
+import com.katto.place.domain.model.AddressType
+
+enum class LocationErrorState {
+    NONE, NO_COARSE, NO_FINE, NO_GPS
+}
+
+enum class RideState {
+    REST, CHOOSE, FINDING, CONFIRM, AT_POINT, STARTED, VERIFIED, CANCELED, ENDED, COMPLETED
+}
+
+data class HomeState(
+    val myLocation: Location? = null,
+    val pickupLocation: Location? = null,
+    val destinationLocation: Location? = null,
+    val stoppageLocation: Location? = null,
+    val primaryBottom: HomeBSNavigation? = HomeBSNavigation.Initial,
+    val secondaryBottom: HomeSecondaryBSNavigation? = null,
+
+    val searchDestinationBsState: SearchDestinationBsState = SearchDestinationBsState(),
+    val chooseRideBsState: ChooseRideBsState = ChooseRideBsState(),
+    val ridePaymentModeBsState: RidePaymentModeBsState = RidePaymentModeBsState(),
+    val bookingConfirmBsState: BookingConfirmBsState = BookingConfirmBsState(),
+    val rideStartedBsState: RideStartedBsState = RideStartedBsState(selectedPaymentOption = PaymentMethods()),
+    val cancelRideBsState: CancelRideBsState = CancelRideBsState(),
+    val rideEndBsState: RideEndedBsState = RideEndedBsState(),
+    val rateRideBsState: RateRideBsState = RateRideBsState(),
+    val rideForState: RideForState = RideForState(),
+    val mapState: MapState = MapState(),
+
+    val rideDataState: RideDataState = RideDataState(),
+    val rideState: RideState = RideState.REST,
+
+    val couponCode: CouponCode? = null,
+
+    val error: String? = null,
+    val isLoading: Boolean = false,
+    val placeSaved: Boolean = false,
+    val showSecondaryBottomSheet: Boolean = false,
+
+    val addressesToBeSaved: Set<AddressType> = emptySet(),
+
+    val locationError: LocationErrorState? = null
+) {
+    companion object{
+        fun idleState(): HomeState {
+            return HomeState(
+                myLocation = null,
+                pickupLocation = null,
+                destinationLocation = null,
+                stoppageLocation = null,
+                primaryBottom = HomeBSNavigation.Initial,
+                secondaryBottom = null,
+
+                searchDestinationBsState = SearchDestinationBsState(),
+                chooseRideBsState = ChooseRideBsState(),
+                bookingConfirmBsState = BookingConfirmBsState(),
+                rideStartedBsState = RideStartedBsState(selectedPaymentOption = PaymentMethods()),
+                cancelRideBsState = CancelRideBsState(),
+                rideEndBsState = RideEndedBsState(),
+                rateRideBsState = RateRideBsState(),
+                rideForState = RideForState(),
+                mapState = MapState(),
+
+                rideDataState = RideDataState(),
+                rideState = RideState.REST,
+
+                error = null,
+                isLoading = false,
+                placeSaved = false,
+                showSecondaryBottomSheet = false,
+
+                addressesToBeSaved = emptySet(),
+
+                locationError = null
+            )
+        }
+    }
+}
