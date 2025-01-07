@@ -1,0 +1,289 @@
+package com.katto.place.presentation.add_place
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.katto.booking.domain.location.model.Location
+import com.katto.booking.domain.location.model.toLatLng
+import com.katto.core.domain.util.Resource
+import com.katto.core.utils.Messages
+import com.katto.place.domain.model.Place
+import com.katto.place.domain.repository.PlacesRepository
+import com.katto.place.presentation.destination.DestinationIntent
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class UpsertPlaceViewModel @Inject constructor(
+    private val placesRepository: PlacesRepository
+) : ViewModel() {
+
+    var state by mutableStateOf(UpsertPlaceState())
+        private set
+
+    private var searchJob: Job? = null
+
+    init {
+        getAvailableAddressType()
+    }
+
+    fun processIntent(upsertPlaceIntent: UpsertPlaceIntent) {
+        when (upsertPlaceIntent) {
+//            UpsertPlaceIntent.AddPlace -> {
+//                addPlace()
+//            }
+
+            is UpsertPlaceIntent.AddingAddress -> {
+                state = state.copy(
+                    address = upsertPlaceIntent.address
+                )
+            }
+
+            /*is UpsertPlaceIntent.AddingPlaceType -> {
+                state = state.copy(
+                    addressType = AddressType.fromString(upsertPlaceIntent.addressType)
+                )
+            }*/
+            is UpsertPlaceIntent.LatLngUpdated -> {
+                state = state.copy(
+                    latLng = upsertPlaceIntent.latLng
+                )
+            }
+
+            is UpsertPlaceIntent.UpdatePlace -> {
+                updatePlace(upsertPlaceIntent.placeId)
+            }
+
+//            is UpsertPlaceIntent.AddingPlaceName -> {
+//                state = state.copy(
+//                    placeName = upsertPlaceIntent.placeName,
+//                )
+//            }
+
+            is UpsertPlaceIntent.SetPlace -> {
+                upsertPlaceIntent.place?.let { place ->
+                    state = state.copy(
+                        placeId = place.id,
+                        placeName = place.name ?: "",
+                        address = place.address,
+                        latLng = place.latLng,
+                        addressType = place.type,
+                        error = null,
+                        isLoading = false,
+                        response = false
+                    )
+                }
+            }
+
+            /*   is UpsertPlaceIntent.SelectingAddressType -> {
+                   val addressType = upsertPlaceIntent.addressType
+                   state = state.copy(
+                       placeName = if (addressType == AddressType.OTHER) "" else addressType.locationName,
+                       addressType = addressType
+                   )
+               }*/
+//            is UpsertPlaceIntent.AddPlace -> {
+//                
+//            }
+//            is UpsertPlaceIntent.SelectingAddressType -> {
+//                
+//            }
+            is UpsertPlaceIntent.AddPlace -> {
+                state = state.copy(
+                    placeName = upsertPlaceIntent.placeName,
+                    addressType = upsertPlaceIntent.addressType,
+                )
+                addPlace()
+            }
+
+            is UpsertPlaceIntent.SearchingLocation -> {
+                state = state.copy(
+                    searchLocation = upsertPlaceIntent.location,
+                )
+                searchLocation()
+            }
+
+            is UpsertPlaceIntent.GetPlaceLatLng -> {
+                getPlaceLatLng(upsertPlaceIntent.googlePlaceId)
+            }
+        }
+    }
+
+    private fun getAvailableAddressType() {
+        viewModelScope.launch {
+            val availableType = placesRepository.getAvailableAddressType()
+            state = state.copy(
+                availableAddressType = availableType
+            )
+        }
+    }
+
+    private fun updatePlace(
+        placeId: Int,
+        place: Place = Place(
+            id = placeId,
+            address = state.address,
+            name = state.placeName,
+            type = state.addressType,
+            latLng = state.latLng
+        )
+    ) {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+
+            when (val response = placesRepository.updatePlace(place)) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        isLoading = false,
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG
+                    )
+                }
+
+                is Resource.Success -> {
+                    val data = response.data
+
+                    if (data == null) {
+                        state = state.copy(
+                            isLoading = false,
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG
+                        )
+                        return@launch
+                    }
+
+                    state = state.copy(
+                        isLoading = false,
+                        response = true,
+                    )
+                }
+
+            }
+        }
+    }
+
+    private fun addPlace(
+        place: Place = Place(
+            address = state.address,
+            name = state.placeName,
+            type = state.addressType,
+            latLng = state.latLng
+        )
+    ) {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+
+            val response = placesRepository.addPlace(place)
+
+            state = when (response) {
+                is Resource.Error -> {
+                    state.copy(
+                        isLoading = false,
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG
+                    )
+                }
+
+                is Resource.Success -> {
+                    state.copy(
+                        isLoading = false,
+                        response = true,
+                        addressSaved = true
+                    )
+                }
+            }
+        }
+    }
+
+    private fun searchLocation(
+        location: String = state.searchLocation,
+        pickupLocation: Location = state.myLocation!!
+    ) {
+        searchJob?.cancel()
+
+        if (location.length > 2) {
+            searchJob = viewModelScope.launch {
+                delay(300)
+                state = state.copy(
+                    isLoading = true,
+                    error = null
+                )
+
+                val response = placesRepository.getAddressPredictions(
+                    inputString = location,
+                    location = pickupLocation,
+                    radius = 50.0
+                )
+
+                when (response) {
+                    is Resource.Error -> {
+                        state = state.copy(
+                            isLoading = false,
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG
+                        )
+                    }
+
+                    is Resource.Success -> {
+                        if (response.data == null) {
+                            state = state.copy(
+                                isLoading = false,
+                                error = response.message ?: Messages.SOMETHING_WENT_WRONG
+                            )
+                        }
+
+                        state = state.copy(
+                            isLoading = false,
+                            relatedAddress = response.data ?: emptyList(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun getPlaceLatLng(placeId: String) {
+        searchJob = viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+
+            when (val response = placesRepository.getPlaceCoordinate(placeId = placeId)) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        isLoading = false,
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG
+                    )
+                }
+
+                is Resource.Success -> {
+                    state = if (response.data == null) {
+                        state.copy(
+                            isLoading = false,
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG
+                        )
+                    } else {
+                        state.copy(
+                            isLoading = false,
+                            latLng = response.data.toLatLng(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        searchJob?.cancel()
+        searchJob = null
+    }
+}
