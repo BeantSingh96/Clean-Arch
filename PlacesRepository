@@ -1,0 +1,28 @@
+package com.katto.place.domain.repository
+
+import com.katto.booking.domain.location.model.Location
+import com.katto.core.domain.util.Resource
+import com.katto.place.domain.destination.Address
+import com.katto.place.domain.model.AddressType
+import com.katto.place.domain.model.Place
+import com.katto.place.domain.model.RouteData
+
+interface PlacesRepository {
+    suspend fun getAllPlaces(): Resource<List<Place>>
+    suspend fun addPlace(place: Place): Resource<Nothing>
+    suspend fun updatePlace(place: Place): Resource<Place>
+    suspend fun getAvailableAddressType(): Set<AddressType>
+    suspend fun getRoute(
+        firstPoint: Location,
+        secondPoint: Location? = null,
+        thirdPoint: Location,
+    ): Resource<RouteData>
+
+    suspend fun getAddressPredictions(
+        inputString: String,
+        location: Location,
+        radius: Double = 100.0
+    ): Resource<List<Address>>
+
+    suspend fun getPlaceCoordinate(placeId: String): Resource<Location>
+}
