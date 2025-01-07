@@ -1,0 +1,519 @@
+package com.katto.booking.presentation.home
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.BottomSheetScaffold
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.rememberStandardBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavHostController
+import androidx.navigation.navOptions
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.gson.Gson
+import com.google.maps.android.compose.rememberCameraPositionState
+import com.katto.R
+import com.katto.booking.domain.location.model.Location
+import com.katto.booking.domain.location.model.toJson
+import com.katto.booking.domain.location.model.toLatLng
+import com.katto.booking.presentation.home.components.ConfirmingDialog
+import com.katto.booking.presentation.home.components.CustomMap
+import com.katto.booking.presentation.home.components.PickupLocationBox
+import com.katto.booking.presentation.home.components.RideVerifiedBs
+import com.katto.booking.presentation.home.components.booking_confirm.BookingConfirmedContent
+import com.katto.booking.presentation.home.components.cancel_ride.CancellationBottomSheet
+import com.katto.booking.presentation.home.components.choose_ride.ChooseRideBSContent
+import com.katto.booking.presentation.home.components.ride_end.RideEndSheetContent
+import com.katto.booking.presentation.home.components.ride_for.RideForBS
+import com.katto.booking.presentation.home.components.ride_payment.RidePaymentModeBS
+import com.katto.booking.presentation.home.components.ride_rating.RideRatingScreen
+import com.katto.booking.presentation.home.components.ride_started.RideStaredContent
+import com.katto.booking.presentation.home.components.search_destination.SearchDestinationBSContent
+import com.katto.booking.presentation.home.navigation.HomeBSNavigation
+import com.katto.booking.presentation.home.navigation.HomeSecondaryBSNavigation
+import com.katto.booking.presentation.rideForContact.data.model.Contact
+import com.katto.core.navigation.BottomNavItem
+import com.katto.core.navigation.MainNavigation
+import com.katto.core.presentation.components.AppProgress
+import com.katto.core.presentation.components.CustomDragHandle
+import com.katto.core.presentation.components.ShowToast
+import com.katto.core.utils.KattoNavArgs
+import com.katto.core.utils.customClick
+import com.katto.core.utils.printLog
+import com.katto.place.domain.destination.Address
+import com.katto.place.domain.destination.toJson
+import com.katto.place.presentation.components.AddPlaceBS
+import com.katto.ui.theme.BgLightGreen
+import com.katto.ui.theme.WhiteColor
+import kotlinx.coroutines.delay
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(
+    viewModel: HomeeViewModel = hiltViewModel(),
+    state: HomeState = viewModel.state,
+    navController: NavHostController,
+    bottomBarVisibility: (Boolean) -> Unit
+) {
+    Box {
+        val sheetState = rememberStandardBottomSheetState(
+            initialValue = SheetValue.Expanded,
+            skipHiddenState = false
+        )
+        val bottomSheetScaffoldState =
+            rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
+
+        var showBottomBar by remember { mutableStateOf(true) }
+
+        val cameraPositionState = rememberCameraPositionState {}
+
+        LaunchedEffect(showBottomBar) {
+            bottomBarVisibility.invoke(showBottomBar)
+        }
+
+        LaunchedEffect(cameraPositionState.isMoving) {
+            val isMoving = cameraPositionState.isMoving
+            if (isMoving) {
+                if (bottomSheetScaffoldState.bottomSheetState.currentValue != SheetValue.PartiallyExpanded) {
+                    bottomSheetScaffoldState.bottomSheetState.hide()
+                }
+            } else {
+                if (bottomSheetScaffoldState.bottomSheetState.currentValue == SheetValue.Hidden) {
+                    bottomSheetScaffoldState.bottomSheetState.expand()
+                }
+            }
+
+            if (!isMoving) {
+                delay(500)
+                bottomSheetScaffoldState.bottomSheetState.expand()
+            }
+        }
+
+        val pickupSelected =
+            navController.currentBackStackEntry?.savedStateHandle?.get<Address>("selectedPickup")
+        val destinationsSelected =
+            navController.currentBackStackEntry?.savedStateHandle?.get<Address>("selectedDestination")
+
+        val pickupFromMap =
+            navController.currentBackStackEntry?.savedStateHandle?.get<Location>("pickupFromMap")
+        val dropFromMap =
+            navController.currentBackStackEntry?.savedStateHandle?.get<Location>("dropFromMap")
+
+        val contact = navController.currentBackStackEntry?.savedStateHandle?.get<Contact>(
+            KattoNavArgs.CONTACT_DETAILS
+        )
+//        val coupon = navController.currentBackStackEntry?.savedStateHandle?.get<CouponCode>(
+//            KattoNavArgs.COUPONS_APPLIED
+//        )
+//
+//        LaunchedEffect(coupon) {
+//            coupon?.let {
+//                viewModel.processIntent(HomeScreenIntent.RideCoupon(it))
+//            }
+//        }
+        LaunchedEffect(pickupSelected) {
+            pickupSelected?.let {
+                viewModel.processIntent(HomeScreenIntent.AddPickupPoint(it))
+            }
+        }
+        LaunchedEffect(destinationsSelected) {
+            destinationsSelected?.let {
+                viewModel.processIntent(HomeScreenIntent.AddDestinations(it))
+            }
+        }
+        LaunchedEffect(pickupFromMap) {
+            pickupFromMap?.let {
+                viewModel.processIntent(HomeScreenIntent.AddPickupLocation(it))
+            }
+//            pickupSelected?.let {
+//                viewModel.processIntent(HomeScreenIntent.AddPickupLocation(it.toLocation()))
+//            }
+        }
+        LaunchedEffect(dropFromMap) {
+            dropFromMap?.let {
+                viewModel.processIntent(HomeScreenIntent.AddDestinationLocation(it))
+            }
+//            destinationsSelected?.let {
+//                viewModel.processIntent(HomeScreenIntent.AddDestinationLocation(it.toLocation()))
+//            }
+        }
+        LaunchedEffect(contact) {
+            contact?.let {
+                viewModel.processIntent(HomeScreenIntent.AddContactRideFor(it))
+            }
+        }
+
+        LaunchedEffect(state.pickupLocation) {
+            state.pickupLocation?.toLatLng()?.let {
+                cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(it, 17F))
+                cameraPositionState.animate(CameraUpdateFactory.scrollBy(0F, 400F))
+            }
+        }
+
+        LaunchedEffect(state.destinationLocation, state.stoppageLocation) {
+            val boundsBuilder = LatLngBounds.builder()
+
+            state.pickupLocation?.toLatLng()?.let { pickup ->
+                boundsBuilder.include(pickup)
+            }
+
+            state.destinationLocation?.toLatLng()?.let { destination ->
+                boundsBuilder.include(destination)
+            }
+
+            printLog("locations  ${Gson().toJson(state.pickupLocation)}/n${Gson().toJson(state.destinationLocation)}")
+
+            if (state.pickupLocation != null &&
+                state.destinationLocation != null
+            ) {
+                val bounds = boundsBuilder.build()
+                cameraPositionState.move(CameraUpdateFactory.newLatLngBounds(bounds, 300))
+                cameraPositionState.animate(CameraUpdateFactory.scrollBy(0F, 400F))
+            }
+
+            bottomSheetScaffoldState.bottomSheetState.expand()
+        }
+
+        LaunchedEffect(state.primaryBottom) {
+            showBottomBar = (state.primaryBottom == HomeBSNavigation.Initial)
+            if (showBottomBar) {
+                sheetState.expand()
+            }
+        }
+
+        BottomSheetScaffold(
+            scaffoldState = bottomSheetScaffoldState,
+            sheetPeekHeight = 36.dp,
+            sheetContent = {
+                when (state.primaryBottom) {
+                    HomeBSNavigation.Initial -> {
+                        SearchDestinationBSContent(
+                            state = state.searchDestinationBsState,
+                        ) {
+                            navController.navigate(
+                                MainNavigation.Destination.route.plus(
+                                    "/${
+                                        state.searchDestinationBsState.destinationAddress?.toJson() ?: state.pickupLocation?.toJson() ?: "-"
+//                                        if (state.searchDestinationBsState.destinationAddress != null)
+//                                            state.searchDestinationBsState.destinationAddress.toJson()
+//                                        else "-"
+                                    }"
+                                )
+                            )
+                        }
+                    }
+
+                    HomeBSNavigation.ChooseRide -> {
+                        ChooseRideBSContent(
+                            state = state.chooseRideBsState,
+                            rideForState = state.rideForState,
+                            navController = navController,
+                            rideForClick = {
+                                viewModel.processIntent(HomeScreenIntent.RideFor)
+                            },
+                            confirmClick = {
+                                viewModel.processIntent(HomeScreenIntent.ChooseRide(it))
+                            },
+                            paymentModeClick = {
+                                viewModel.processIntent(HomeScreenIntent.PaymentMode)
+                            }
+                        )
+                    }
+
+                    HomeBSNavigation.BookingConfirm -> {
+                        BookingConfirmedContent(
+                            state = state.bookingConfirmBsState,
+                            otpVerified = {
+
+                            },
+                            openChat = {
+                                navController.navigate(
+                                    MainNavigation.RideChat.route.plus(
+                                        "/${state.bookingConfirmBsState.rideId}/${state.bookingConfirmBsState.captainId}/${state.bookingConfirmBsState.captainName}"
+                                    )
+                                )
+                            },
+                            cancelClick = {
+                                viewModel.processIntent(HomeScreenIntent.CancelClick)
+                            }
+                        )
+                    }
+
+                    HomeBSNavigation.RideStared -> {
+                        RideStaredContent(
+                            state = state.rideStartedBsState,
+                            navController = navController,
+                            shareClick = {
+
+                            },
+                            cancelClick = {
+                                viewModel.processIntent(HomeScreenIntent.CancelClick)
+                            }
+                        )
+                    }
+
+                    HomeBSNavigation.RideEnded -> {
+                        RideEndSheetContent(
+                            state = state.rideEndBsState
+                        ) {
+                            navController.navigate(BottomNavItem.Home.route) {
+                                navOptions {
+                                    popUpTo(BottomNavItem.Home.route)
+                                    launchSingleTop = true
+                                }
+                            }
+                        }
+                    }
+
+                    HomeBSNavigation.RideRating -> {
+                        RideRatingScreen(
+                            state.rateRideBsState
+                        ) { rating ->
+                            viewModel.processIntent(HomeScreenIntent.RateRide(rating))
+                        }
+                    }
+
+                    null -> {}
+                }
+            },
+            sheetDragHandle = {
+                if (state.primaryBottom == HomeBSNavigation.BookingConfirm) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(BgLightGreen)
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_confirm),
+                            contentDescription = "Confirm",
+                            modifier = Modifier
+                                .size(20.dp)
+                                .padding(end = 4.dp),
+                            tint = Color.Unspecified
+                        )
+
+                        Text(
+                            text = stringResource(R.string.booking_confirmed),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                } else {
+                    CustomDragHandle()
+                }
+            },
+            sheetContainerColor = Color.White,
+            sheetShadowElevation = 12.dp
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Transparent)
+            ) {
+                CustomMap(
+                    cameraPositionState,
+                    mapState = state.mapState,
+                )
+
+                if (state.primaryBottom != HomeBSNavigation.Initial) {
+                    //Back Icon
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_back),
+                        contentDescription = stringResource(R.string.back_icon),
+                        modifier = Modifier
+                            .customClick {
+                                navController.navigate(BottomNavItem.Home.route) {
+                                    popUpTo(BottomNavItem.Home.route) {
+                                        inclusive = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                            .padding(12.dp)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .padding(8.dp)
+                            .padding(end = 2.dp)
+                    )
+                } else {
+                    PickupLocationBox(
+                        modifier = Modifier
+                            .customClick {
+                                navController.navigate(
+                                    MainNavigation.PickupLocation.route.plus(
+                                        "/${state.pickupLocation?.toJson() ?: state.myLocation?.toJson() ?: "-"}"
+                                    )
+                                )
+                            }
+                            .fillMaxWidth(0.87f)
+                            .align(Alignment.TopCenter)
+                            .padding(top = 24.dp),
+                        address = state.pickupLocation?.address ?: state.myLocation?.address ?: "",
+                        isSaved = false
+                    ) {
+                        viewModel.processIntent(HomeScreenIntent.SaveLocationClicked)
+                    }
+                }
+            }
+
+            if (state.showSecondaryBottomSheet) {
+                ModalBottomSheet(
+                    onDismissRequest = {
+                        viewModel.processIntent(HomeScreenIntent.DismissSecondarySheet)
+                    },
+                    dragHandle = { CustomDragHandle() },
+                    containerColor = WhiteColor,
+                    tonalElevation = 12.dp,
+                ) {
+
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+
+                        //secondary bottom sheet
+                        when (state.secondaryBottom) {
+                            HomeSecondaryBSNavigation.PaymentMode -> {
+                                RidePaymentModeBS(
+                                    paymentMode = state.ridePaymentModeBsState,
+                                    onClose = {
+                                        viewModel.processIntent(HomeScreenIntent.DismissSecondarySheet)
+                                    },
+                                    couponCodeSelected = {
+                                        viewModel.processIntent(HomeScreenIntent.RideCoupon(it))
+                                    }
+                                )
+                            }
+
+                            HomeSecondaryBSNavigation.BookFor -> {
+                                RideForBS(
+                                    navController = navController,
+                                    state = state.rideForState,
+                                    onContactSelected = { index ->
+                                        viewModel.processIntent(
+                                            HomeScreenIntent.RideForContactSelected(index)
+                                        )
+                                    },
+                                    proceedClicked = {
+                                        viewModel.processIntent(HomeScreenIntent.RideForSelected)
+                                    }
+                                )
+                            }
+
+                            HomeSecondaryBSNavigation.AddPlaces -> {
+                                if (state.addressesToBeSaved.toSet().isNotEmpty()) {
+                                    AddPlaceBS(
+                                        name = "",
+                                        addressTypes = state.addressesToBeSaved.toSet(),
+                                        onSubmit = { addressType, placeName ->
+                                            viewModel.processIntent(
+                                                HomeScreenIntent.SaveLocation(
+                                                    addressType,
+                                                    placeName
+                                                )
+                                            )
+                                        }
+                                    )
+                                }
+                            }
+
+                            HomeSecondaryBSNavigation.CancelRide -> {
+                                CancellationBottomSheet(
+                                    state = state.cancelRideBsState,
+                                    dismiss = {
+                                        viewModel.processIntent(HomeScreenIntent.DismissSecondarySheet)
+                                    },
+                                    cancelRide = {
+                                        viewModel.processIntent(HomeScreenIntent.CancelRide(it))
+                                    }
+                                )
+                            }
+
+                            HomeSecondaryBSNavigation.RideVerified -> {
+                                RideVerifiedBs {
+                                    viewModel.processIntent(HomeScreenIntent.DismissSecondarySheet)
+                                }
+                            }
+
+                            null -> {}
+                        }
+                    }
+
+                    Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.systemBars))
+                }
+            }
+        }
+
+        when {
+            state.isLoading -> {
+                AppProgress(
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
+
+            state.error != null -> {
+                ShowToast(state.error)
+
+                LaunchedEffect(Unit) {
+                    delay(300)
+                    viewModel.processIntent(HomeScreenIntent.ClearError)
+                }
+            }
+
+            state.rideState == RideState.FINDING -> {
+                ConfirmingDialog()
+            }
+
+            state.locationError != null -> {
+                when (state.locationError) {
+                    LocationErrorState.NO_COARSE -> {
+                        ShowToast(stringResource(R.string.location_permissions_required))
+                    }
+
+                    LocationErrorState.NO_FINE -> {
+                        ShowToast(stringResource(R.string.location_permissions_required))
+                    }
+
+                    LocationErrorState.NO_GPS -> {
+                        ShowToast(stringResource(R.string.gps_disabled))
+                    }
+
+                    else -> {}
+                }
+            }
+        }
+    }
+}
