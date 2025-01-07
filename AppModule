@@ -1,0 +1,210 @@
+package com.katto.di
+
+import android.app.Application
+import android.content.Context
+import android.location.Geocoder
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.preferencesDataStore
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
+import com.google.android.libraries.places.api.Places
+import com.google.android.libraries.places.api.net.PlacesClient
+import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.katto.auth.data.remote.AuthApi
+import com.katto.auth.domain.repository.LocalStorageManager
+import com.katto.booking.data.remote.rewards.RewardsApi
+import com.katto.booking.data.remote.ride.RideApi
+import com.katto.chat.data.remote.ChatApi
+import com.katto.core.data.remote.uttil.CustomHeaderInterceptor
+import com.katto.core.utils.Params
+import com.katto.help.data.remote.HelpApi
+import com.katto.payment.data.remote.PaymentApi
+import com.katto.place.data.remote.GooglePlaceApi
+import com.katto.place.data.remote.model.PlacesApi
+import com.katto.profile.data.remote.ProfileApi
+import com.katto.static_pages.data.remote.StaticApi
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import io.socket.client.IO
+import io.socket.client.Socket
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.create
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import javax.inject.Named
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+object AppModule {
+
+    private val Context.userPreferencesDataStore by preferencesDataStore(name = "my_preferences")
+
+    @Provides
+    @Singleton
+    @Named("KattoRetrofit")
+    fun provideRetrofitClient(
+        localStorageManager: LocalStorageManager
+    ): Retrofit {
+        val loggingInterceptor = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+
+        val client = OkHttpClient.Builder()
+            .addInterceptor(CustomHeaderInterceptor(localStorageManager))
+            .addInterceptor(loggingInterceptor)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+
+        return Retrofit.Builder()
+            .baseUrl(Params.BASE_URL)
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    @Named("GoogleRetrofit")
+    fun provideGoogleRetrofitClient(): Retrofit {
+        val loggingInterceptor = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+
+        val client = OkHttpClient.Builder()
+            .addInterceptor(loggingInterceptor)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+
+        return Retrofit.Builder()
+            .baseUrl("https://maps.googleapis.com/")
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideSocketInstance(localStorageManager: LocalStorageManager): Socket {
+        val opts = IO.Options.builder()
+            .setAuth(
+                runBlocking {
+                    mapOf(
+                        Params.AUTHORIZATION to "Bearer ${localStorageManager.getToken()}",
+                        Params.KATTO_APP_TOKEN to Params.APP_TOKEN
+                    )
+                }
+            )
+            .build()
+        return IO.socket(Params.SOCKET_URL, opts)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAUthApi(@Named("KattoRetrofit") retrofit: Retrofit): AuthApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun providePlacesApi(@Named("KattoRetrofit") retrofit: Retrofit): PlacesApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideProfileApi(@Named("KattoRetrofit") retrofit: Retrofit): ProfileApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideStaticApi(@Named("KattoRetrofit") retrofit: Retrofit): StaticApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun providePaymentApi(@Named("KattoRetrofit") retrofit: Retrofit): PaymentApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideRideApi(@Named("KattoRetrofit") retrofit: Retrofit): RideApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatApi(@Named("KattoRetrofit") retrofit: Retrofit): ChatApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideRewardsApi(@Named("KattoRetrofit") retrofit: Retrofit): RewardsApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideHelpApi(@Named("KattoRetrofit") retrofit: Retrofit): HelpApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideGooglePlacesApi(@Named("GoogleRetrofit") retrofit: Retrofit): GooglePlaceApi {
+        return retrofit.create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideDataSource(@ApplicationContext context: Context): DataStore<Preferences> {
+        return context.userPreferencesDataStore
+    }
+
+    @Provides
+    @Singleton
+    fun provideGson(): Gson {
+        return GsonBuilder().serializeNulls().create()
+    }
+
+    @Provides
+    @Singleton
+    fun provideFusedLocationClient(app: Application): FusedLocationProviderClient {
+        return LocationServices.getFusedLocationProviderClient(app)
+    }
+
+    @Provides
+    @Singleton
+    fun provideGeoCoder(app: Application): Geocoder {
+        return Geocoder(app, Locale.getDefault())
+    }
+
+    @Provides
+    @Singleton
+    fun providePlacesClient(application: Application): PlacesClient {
+        return Places.createClient(application)
+
+    }
+
+}
