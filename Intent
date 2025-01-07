@@ -1,0 +1,32 @@
+package com.katto.booking.presentation.home
+
+import com.katto.booking.domain.home.CancelReason
+import com.katto.booking.domain.home.RideType
+import com.katto.booking.domain.location.model.Location
+import com.katto.booking.presentation.rideForContact.data.model.Contact
+import com.katto.payment.domain.model.CouponCode
+import com.katto.place.domain.destination.Address
+import com.katto.place.domain.model.AddressType
+
+sealed class HomeScreenIntent {
+    data object BackClick : HomeScreenIntent()
+    data class AddPickupLocation(val pickupLocation: Location) : HomeScreenIntent()
+    data class AddDestinationLocation(val destination: Location) : HomeScreenIntent()
+    data class AddPickupPoint(val pickupLocation: Address) : HomeScreenIntent()
+    data class AddDestinations(val destinations: Address) : HomeScreenIntent()
+    data class CancelRide(val cancelReason: CancelReason) : HomeScreenIntent()
+    data class ChooseRide(val rideType: RideType) : HomeScreenIntent()
+    data class SaveLocation(val type: AddressType, val name: String) : HomeScreenIntent()
+    data object CancelClick : HomeScreenIntent()
+    data class RideCoupon(val couponCode: CouponCode) : HomeScreenIntent()
+    data object PaymentMode : HomeScreenIntent()
+    data object RideFor : HomeScreenIntent()
+    data class AddContactRideFor(val contact: Contact?) : HomeScreenIntent()
+    data class RideForContactSelected(val index: Int) : HomeScreenIntent()
+    data object RideForSelected : HomeScreenIntent()
+    data object FindRide : HomeScreenIntent()
+    data class RateRide(val rating: Double) : HomeScreenIntent()
+    data object SaveLocationClicked : HomeScreenIntent()
+    data object DismissSecondarySheet : HomeScreenIntent()
+    data object ClearError : HomeScreenIntent()
+}
