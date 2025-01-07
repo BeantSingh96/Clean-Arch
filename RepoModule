@@ -1,0 +1,73 @@
+package com.katto.di
+
+import com.katto.auth.data.remote.repository.AuthRepositoryImpl
+import com.katto.auth.domain.repository.AuthRepository
+import com.katto.booking.data.remote.rewards.repository.RewardsRepositoryImpl
+import com.katto.booking.data.remote.ride.repository.RideRepositoryImpl
+import com.katto.booking.data.remote.ride.repository.SocketRepository
+import com.katto.booking.domain.rewards.repository.RewardsRepository
+import com.katto.booking.domain.ride.repository.RideRepository
+import com.katto.chat.data.remote.repository.ChatRepositoryImpl
+import com.katto.chat.domain.repository.ChatRepository
+import com.katto.core.data.remote.socket.SocketClient
+import com.katto.core.data.remote.socket.SocketIOClient
+import com.katto.help.data.remote.repository.HelpRepositoryImpl
+import com.katto.help.domain.repository.HelpRepository
+import com.katto.payment.data.remote.repository.PaymentRepositoryImpl
+import com.katto.payment.domain.repository.PaymentRepository
+import com.katto.place.data.remote.repository.PlacesRepositoryImpl
+import com.katto.place.domain.repository.PlacesRepository
+import com.katto.profile.data.remote.repository.ProfileRepositoryImpl
+import com.katto.profile.domain.repository.ProfileRepository
+import com.katto.static_pages.data.remote.repository.StaticRepositoryImpl
+import com.katto.static_pages.domain.repository.StaticRepository
+import dagger.Binds
+import dagger.Module
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class NetworkModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindAuthRepository(authRepositoryImpl: AuthRepositoryImpl): AuthRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindProfileRepository(profileRepositoryImpl: ProfileRepositoryImpl): ProfileRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindPlacesRepository(placesRepositoryImpl: PlacesRepositoryImpl): PlacesRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindStaticRepository(staticRepositoryImpl: StaticRepositoryImpl): StaticRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindPaymentRepository(paymentRepositoryImpl: PaymentRepositoryImpl): PaymentRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindRideRepository(rideRepository: RideRepositoryImpl): RideRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindRewardsRepository(rideRepository: RewardsRepositoryImpl): RewardsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindHelpRepository(helpRepositoryImpl: HelpRepositoryImpl): HelpRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSocketModule(socketIOClient: SocketIOClient): SocketClient
+
+    @Binds
+    @Singleton
+    abstract fun bindChatRepository(chatRepositoryImpl: ChatRepositoryImpl): ChatRepository
+}
