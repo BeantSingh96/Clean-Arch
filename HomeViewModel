@@ -1,0 +1,1427 @@
+package com.katto.booking.presentation.home
+
+import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
+import com.katto.auth.domain.repository.LocalStorageManager
+import com.katto.booking.data.remote.model.CreateSessionPayload
+import com.katto.booking.data.remote.ride.SocketListener
+import com.katto.booking.data.remote.ride.model.BaseSubmitRideRatingPayload
+import com.katto.booking.data.remote.ride.model.CaptainLocationResponse
+import com.katto.booking.data.remote.ride.model.CaptainReachedResponse
+import com.katto.booking.data.remote.ride.model.CurrentBookingResponse
+import com.katto.booking.data.remote.ride.model.RideAcceptedResponse
+import com.katto.booking.data.remote.ride.model.RideBookingResponse
+import com.katto.booking.data.remote.ride.model.RideCancelledResponse
+import com.katto.booking.data.remote.ride.model.RideCompletedResponse
+import com.katto.booking.data.remote.ride.model.RideDroppedResponse
+import com.katto.booking.data.remote.ride.model.RideStartedResponse
+import com.katto.booking.data.remote.ride.model.SubmitRideRatingPayload
+import com.katto.booking.data.remote.ride.model.toLocation
+import com.katto.booking.data.remote.ride.repository.SocketRepository
+import com.katto.booking.domain.home.CancelReason
+import com.katto.booking.domain.home.CaptainsData
+import com.katto.booking.domain.home.CreateSessionType
+import com.katto.booking.domain.home.RideStatus
+import com.katto.booking.domain.home.RideType
+import com.katto.booking.domain.home.User
+import com.katto.booking.domain.location.LocationTracker
+import com.katto.booking.domain.location.model.Location
+import com.katto.booking.domain.location.model.toLatLng
+import com.katto.booking.mappers.toRideType
+import com.katto.booking.presentation.home.components.RideDataState
+import com.katto.booking.presentation.home.components.booking_confirm.BookingConfirmBsState
+import com.katto.booking.presentation.home.components.ride_for.RideForContacts
+import com.katto.booking.presentation.home.components.ride_for.RideForState
+import com.katto.booking.presentation.home.navigation.HomeBSNavigation
+import com.katto.booking.presentation.home.navigation.HomeSecondaryBSNavigation
+import com.katto.booking.presentation.rideForContact.data.mapper.toRideForContact
+import com.katto.chat.data.remote.model.ChatMessage
+import com.katto.chat.data.remote.model.Connection
+import com.katto.chat.data.remote.model.SendMessageResponse
+import com.katto.chat.domain.repository.ChatRepository
+import com.katto.chat.presentation.ChatIntent
+import com.katto.chat.presentation.ChatState
+import com.katto.chat.presentation.MessageType
+import com.katto.core.data.remote.socket.SocketClient
+import com.katto.core.domain.util.Resource
+import com.katto.core.utils.API
+import com.katto.core.utils.Messages
+import com.katto.core.utils.getDeviceId
+import com.katto.core.utils.getDeviceName
+import com.katto.core.utils.hasAccessCoarseLocationPermission
+import com.katto.core.utils.hasAccessFineLocationPermission
+import com.katto.core.utils.isGpsEnabled
+import com.katto.core.utils.printLog
+import com.katto.payment.domain.model.CouponCode
+import com.katto.payment.domain.model.PaymentMethods
+import com.katto.payment.mapper.toPaymentCoupon
+import com.katto.payment.mapper.toPaymentMethod
+import com.katto.place.domain.model.AddressType
+import com.katto.place.domain.model.Place
+import com.katto.place.domain.repository.PlacesRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class HomeeViewModel @Inject constructor(
+    private val placesRepository: PlacesRepository,
+    private val chatRepository: ChatRepository,
+    private val socketRepo: SocketRepository,
+//    private val rideRepository: RidesRepository,
+    private val locationTracker: LocationTracker,
+    private val localStorageManager: LocalStorageManager,
+    private val socketClient: SocketClient,
+    private val application: Application,
+) : ViewModel(), SocketListener {
+
+    var state by mutableStateOf(HomeState())
+        private set
+    var chatState by mutableStateOf(ChatState())
+        private set
+
+    private var mapState by mutableStateOf(state.mapState)
+    private var searchDestinationBsState by mutableStateOf(state.searchDestinationBsState)
+    private var ridePaymentModeBsState by mutableStateOf(state.ridePaymentModeBsState)
+    private var chooseRideBsState by mutableStateOf(state.chooseRideBsState)
+    private var cancelRideBsState by mutableStateOf(state.cancelRideBsState)
+    private var rideDataState by mutableStateOf(state.rideDataState)
+    private var rideForBsState by mutableStateOf(state.rideForState)
+    private var rideStartedBsState by mutableStateOf(state.rideStartedBsState)
+    private var rideEndBsState by mutableStateOf(state.rideEndBsState)
+
+    private var selectedPos by mutableIntStateOf(0)
+
+    init {
+        getStaticData()
+        if (checkLocationPermissions()) {
+            getMyCurrentLocation()
+        }
+
+        viewModelScope.launch {
+            socketClient.connect()
+            socketRepo.initSocket(this@HomeeViewModel)
+            socketRepo.initSocketChat(this@HomeeViewModel)
+
+//            socketHandling()
+        }
+    }
+
+    fun processIntent(homeScreenIntent: HomeScreenIntent) {
+        when (homeScreenIntent) {
+            is HomeScreenIntent.BackClick -> {
+                state = state.copy(
+                    rideState = RideState.REST,
+                    showSecondaryBottomSheet = false,
+                    primaryBottom = HomeBSNavigation.Initial
+                )
+            }
+
+            is HomeScreenIntent.AddPickupLocation -> {
+                printLog("pickupLocation  ${Gson().toJson(homeScreenIntent.pickupLocation)}")
+                mapState = mapState.copy(
+                    firstPoint = homeScreenIntent.pickupLocation,
+                )
+
+                state = state.copy(
+                    pickupLocation = homeScreenIntent.pickupLocation,
+                    mapState = mapState,
+                    isLoading = false,
+                )
+            }
+
+            is HomeScreenIntent.AddDestinationLocation -> {
+                printLog("destination  ${Gson().toJson(homeScreenIntent.destination)}")
+//                searchDestinationBsState = searchDestinationBsState.copy(
+//                    destinationAddress = homeScreenIntent.destination,
+//                )
+//
+//                state = state.copy(
+//                    searchDestinationBsState = searchDestinationBsState,
+//                    destinationLocation = homeScreenIntent.destination,
+//                )
+//                findRoute()
+            }
+
+            is HomeScreenIntent.AddPickupPoint -> {
+                val address = homeScreenIntent.pickupLocation
+                setPickupLocation(address.id!!)
+            }
+
+            is HomeScreenIntent.AddDestinations -> {
+                searchDestinationBsState = searchDestinationBsState.copy(
+                    destinationAddress = homeScreenIntent.destinations,
+                )
+                state = state.copy(
+                    searchDestinationBsState = searchDestinationBsState,
+                )
+
+                val firstPoint = homeScreenIntent.destinations
+//                val secondPoint = homeScreenIntent.destinations.getOrNull(1)
+
+                setDestination(firstPoint.id ?: "", null /*secondPoint?.id*/)
+            }
+
+            HomeScreenIntent.CancelClick -> {
+                state = state.copy(
+                    showSecondaryBottomSheet = true,
+                    secondaryBottom = HomeSecondaryBSNavigation.CancelRide
+                )
+            }
+
+            is HomeScreenIntent.CancelRide -> {
+                cancelRide(homeScreenIntent.cancelReason)
+            }
+
+            is HomeScreenIntent.ChooseRide -> {
+                chooseRide(homeScreenIntent.rideType)
+            }
+
+            is HomeScreenIntent.RideCoupon -> {
+                printLog("couponCode   ${homeScreenIntent.couponCode}")
+                state = state.copy(
+                    couponCode = homeScreenIntent.couponCode
+                )
+                findRidesNearMe()
+            }
+
+            HomeScreenIntent.PaymentMode -> {
+                ridePaymentModeBsState = ridePaymentModeBsState.copy(
+                    selectedPaymentOption = chooseRideBsState.selectedPaymentOption
+                        ?: PaymentMethods.getCashMethod(),
+                    paymentOptions = chooseRideBsState.paymentOptions,
+                    coupons = chooseRideBsState.coupons,
+                )
+            }
+
+            HomeScreenIntent.RideFor -> {
+                state = state.copy(
+                    showSecondaryBottomSheet = true,
+                    secondaryBottom = HomeSecondaryBSNavigation.BookFor,
+                    rideForState = state.rideForState
+                )
+            }
+
+            HomeScreenIntent.SaveLocationClicked -> {
+                getAvailableAddressesToBeSaved()
+            }
+
+            is HomeScreenIntent.SaveLocation -> {
+                addPlace(
+                    name = homeScreenIntent.name,
+                    type = homeScreenIntent.type,
+                )
+            }
+
+            HomeScreenIntent.FindRide -> {
+//                findRide()
+            }
+
+            is HomeScreenIntent.AddContactRideFor -> {
+                val sameNumber = rideForBsState.allContacts.filter {
+                    it.number == homeScreenIntent.contact?.number
+                }
+
+                if (sameNumber.isEmpty() && rideForBsState.allContacts.size < 4) {
+                    val allContacts = mutableListOf<RideForContacts>().apply {
+                        addAll(rideForBsState.allContacts)
+                        this.map { it.selected = false }
+                        homeScreenIntent.contact?.let {
+                            add(it.toRideForContact())
+                        }
+                        selectedPos = size - 1
+                    }
+                    val isNewSelectionForMe = selectedPos == 0
+
+                    rideForBsState = rideForBsState.copy(
+                        isForMe = isNewSelectionForMe,
+                        selectedUser = User(
+                            bookingForName = homeScreenIntent.contact?.name ?: "",
+                            bookingForDialCode = if (!isNewSelectionForMe) "+91" else "",
+                            bookingForContactNumber = homeScreenIntent.contact?.number?.replace(
+                                oldValue = "+91", newValue = ""
+                            ) ?: "",
+                        ),
+                        allContacts = allContacts
+                    )
+
+                    state = state.copy(
+                        rideForState = rideForBsState
+                    )
+                }
+            }
+
+            HomeScreenIntent.RideForSelected -> {
+                printLog("number ${Gson().toJson(rideForBsState)}")
+                state = state.copy(
+                    showSecondaryBottomSheet = false,
+                )
+            }
+
+            is HomeScreenIntent.RideForContactSelected -> {
+                val updatedContacts = rideForBsState.allContacts.mapIndexed { index, contact ->
+                    contact.copy(selected = index == homeScreenIntent.index)
+                }
+                selectedPos = homeScreenIntent.index
+                val isNewSelectionForMe = homeScreenIntent.index == 0
+
+                val selectedContact = updatedContacts.firstOrNull { it.selected }
+
+                rideForBsState = rideForBsState.copy(
+                    isForMe = isNewSelectionForMe,
+                    allContacts = updatedContacts,
+                    selectedUser = if (isNewSelectionForMe) User() else User(
+                        bookingForName = selectedContact?.name ?: "",
+                        bookingForContactNumber = selectedContact?.number?.replace(
+                            oldValue = "+91", newValue = ""
+                        ) ?: "",
+                        bookingForDialCode = "+91",
+                    )
+                )
+                state = state.copy(
+                    rideForState = rideForBsState
+                )
+            }
+
+            HomeScreenIntent.DismissSecondarySheet -> {
+                viewModelScope.launch {
+                    if (state.secondaryBottom == HomeSecondaryBSNavigation.RideVerified) {
+                        state = state.copy(
+                            rideState = RideState.STARTED,
+                            primaryBottom = HomeBSNavigation.RideStared,
+                            showSecondaryBottomSheet = false,
+                        )
+                    }
+
+                    state = state.copy(
+                        showSecondaryBottomSheet = false,
+                    )
+                }
+            }
+
+            is HomeScreenIntent.RateRide -> {
+                submitRating(homeScreenIntent.rating)
+            }
+
+            HomeScreenIntent.ClearError -> {
+                state = state.copy(
+                    error = null
+                )
+            }
+        }
+    }
+
+    fun processIntent(chatIntent: ChatIntent) {
+        when (chatIntent) {
+            is ChatIntent.GetChatHistory -> {
+                getChatHistory(chatIntent)
+            }
+
+            is ChatIntent.AddMessage -> {
+                chatState = chatState.copy(
+                    message = chatIntent.message
+                )
+            }
+
+            is ChatIntent.SendMessage -> {
+                sendMessage(chatIntent.payload.captainId)
+            }
+        }
+    }
+
+    private fun getStaticData() {
+        getAvailableRides()
+        getRideCancelReasons()
+
+        viewModelScope.launch {
+            placesRepository.getAllPlaces()
+
+            createSession()
+        }
+    }
+
+//    private suspend fun socketHandling() {
+//        rideRepository.also {
+//            socketClient.connect()
+//
+//            it.listener = this
+//        }
+//    }
+
+    override fun onConnect(connect: Boolean) {
+        printLog("connect $connect")
+        viewModelScope.launch {
+            if (!connect) {
+                socketClient.connect()
+            } else {
+
+            }
+        }
+    }
+
+    override fun onNearByCaptains(captains: List<CaptainsData>) {
+        captainsData(captains)
+    }
+
+    override fun onRideSent(bookingSent: RideBookingResponse) {
+        printLog("bookingSent $bookingSent")
+        rideRequestSent(bookingSent)
+    }
+
+    override fun onRideCancel(bookingCancel: RideCancelledResponse) {
+        rideCancel(bookingCancel)
+    }
+
+    override fun onRideAccepted(bookingAccepted: RideAcceptedResponse) {
+        rideAccepted(bookingAccepted)
+    }
+
+    override fun onCaptainLocation(captainLocation: CaptainLocationResponse) {
+        observeCaptainCurrentLocation(captainLocation)
+    }
+
+    override fun onCurrentRide(bookingCurrent: CurrentBookingResponse) {
+        observeCurrentBooking(bookingCurrent)
+    }
+
+    override fun onAtPoint(reached: CaptainReachedResponse) {
+        observeAtPickupPoint(reached)
+    }
+
+    override fun onVerifyRide(started: RideStartedResponse) {
+        observeRideVerified(started)
+    }
+
+    override fun onRideDropped(dropped: RideDroppedResponse) {
+        observeBookingEndRide(dropped)
+    }
+
+    override fun onRideCompleted(completed: RideCompletedResponse) {
+        observeBookingCompleted(completed)
+    }
+
+    override fun onSendMessage(messageSent: SendMessageResponse) {
+        observeSendMessage(messageSent)
+    }
+
+    override fun onError(error: String) {
+        state = state.copy(
+            isLoading = false,
+            error = error
+        )
+    }
+
+    private fun captainsData(captains: List<CaptainsData>) {
+        mapState = mapState.copy(
+            showNearby = true,
+            captains = captains
+        )
+        state = state.copy(
+            mapState = mapState
+        )
+    }
+
+    private fun rideCancel(cancelled: RideCancelledResponse) {
+        printLog("cancelled   $cancelled")
+        val mapState = mapState.copy(
+            firstPoint = null,
+            secondPoint = null,
+            thirdPoint = null,
+            route = emptyList(),
+        )
+
+        searchDestinationBsState = searchDestinationBsState.copy(
+            destinationAddress = null,
+        )
+        rideDataState = RideDataState()
+
+        state = state.copy(
+            rideState = RideState.CANCELED,
+            isLoading = false,
+            showSecondaryBottomSheet = false,
+            destinationLocation = null,
+            mapState = mapState,
+            rideDataState = rideDataState,
+            searchDestinationBsState = searchDestinationBsState,
+            primaryBottom = HomeBSNavigation.Initial
+        )
+    }
+
+    private fun rideRequestSent(bookingSent: RideBookingResponse) {
+        printLog("bookingSent   $bookingSent")
+        state = state.copy(
+            rideState = RideState.FINDING
+        )
+    }
+
+    private fun rideAccepted(rideAccepted: RideAcceptedResponse) {
+        rideAccepted.ride?.let { ride ->
+            mapState = mapState.copy(
+                showNearby = false,
+                selectedRide = rideAccepted.vehicle?.firstOrNull()?.toRideType()
+            )
+            rideDataState = rideDataState.copy(
+                rideId = ride.rideId ?: 0,
+                captainId = ride.captainId ?: 0
+            )
+            state = state.copy(
+                rideState = RideState.CONFIRM,
+                rideDataState = rideDataState,
+                bookingConfirmBsState = BookingConfirmBsState(
+                    rideId = (ride.rideId ?: 0).toString(),
+                    captainId = (ride.captainId ?: 0).toString(),
+                    captainName = (ride.rideCaptainName ?: 0).toString(),
+                    address = ride.pickupAddress ?: "",
+                    time = 3,
+                    ridePin = ride.otp ?: 0,
+                    driverName = ride.rideCaptainName ?: "",
+                    driverRating = ride.captainRating ?: 0.0,
+                    driverImg = ride.rideCaptainProfileImage ?: "",
+                    driverNumber = ride.rideCaptainPhone ?: "",
+                    carImg = "https://images.pexels.com/photos/2399254/pexels-photo-2399254.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
+                    carModel = ride.vehicleName ?: "",
+                    carNumber = ride.vehicleNumber ?: ""
+                ),
+                primaryBottom = HomeBSNavigation.BookingConfirm,
+                isLoading = false,
+                mapState = mapState
+            )
+        }
+    }
+
+    private fun getCurrentBooking() {
+        viewModelScope.launch {
+            socketRepo.getCurrentBooking()
+        }
+    }
+
+    private fun observeCurrentBooking(bookingCurrent: CurrentBookingResponse) {
+        bookingCurrent.ride?.let { ride ->
+            when (ride.rideStatusId) {
+                RideStatus.ACCEPTED.value -> {
+//                        mapState = mapState.copy(
+//                            showNearby = false,
+//                            selectedRide = it.vehicle?.firstOrNull()?.toRideType()
+//                        )
+
+                    rideDataState = rideDataState.copy(
+                        rideId = ride.rideId ?: 0,
+                        captainId = ride.captainId ?: 0
+                    )
+
+                    state = state.copy(
+                        rideState = RideState.CONFIRM,
+                        rideDataState = rideDataState,
+                        bookingConfirmBsState = BookingConfirmBsState(
+                            rideId = (ride.rideId ?: 0).toString(),
+                            captainName = (ride.rideCaptainName ?: 0).toString(),
+                            captainId = (ride.captainId ?: 0).toString(),
+                            address = ride.pickupAddress ?: "",
+                            time = 3,
+                            ridePin = ride.otp ?: 0,
+                            driverName = ride.rideCaptainName ?: "",
+                            driverRating = ride.captainRating ?: 0.0,
+                            driverImg = ride.rideCaptainProfileImage ?: "",
+                            driverNumber = ride.rideCaptainPhone ?: "",
+                            carImg = "https://images.pexels.com/photos/2399254/pexels-photo-2399254.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
+                            carModel = ride.vehicleName ?: "",
+                            carNumber = ride.vehicleNumber ?: ""
+                        ),
+                        primaryBottom = HomeBSNavigation.BookingConfirm,
+                        isLoading = false,
+                        mapState = mapState
+                    )
+                }
+
+                RideStatus.AT_POINT.value -> {
+
+                    rideDataState = rideDataState.copy(
+                        rideId = ride.rideId ?: 0,
+                        captainId = ride.captainId ?: 0
+                    )
+
+                    state = state.copy(
+                        rideState = RideState.AT_POINT,
+                        rideDataState = rideDataState,
+                        bookingConfirmBsState = BookingConfirmBsState(
+                            rideId = (ride.rideId ?: 0).toString(),
+                            captainName = (ride.rideCaptainName ?: 0).toString(),
+                            captainId = (ride.captainId ?: 0).toString(),
+                            address = ride.pickupAddress ?: "",
+                            time = 3,
+                            ridePin = ride.otp ?: 0,
+                            driverName = ride.rideCaptainName ?: "",
+                            driverRating = ride.captainRating ?: 0.0,
+                            driverImg = ride.rideCaptainProfileImage ?: "",
+                            driverNumber = ride.rideCaptainPhone ?: "",
+                            carImg = "https://images.pexels.com/photos/2399254/pexels-photo-2399254.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
+                            carModel = ride.vehicleName ?: "",
+                            carNumber = ride.vehicleNumber ?: ""
+                        ),
+                        primaryBottom = HomeBSNavigation.BookingConfirm,
+                        isLoading = false,
+                        error = ride.rideStatusMsg
+                            ?: "Captain reached at your location",
+                        showSecondaryBottomSheet = false,
+                        mapState = mapState
+                    )
+                }
+
+                RideStatus.COMPLETED.value -> {
+                    state = state.copy(
+                        rideState = RideState.COMPLETED,
+                        rideDataState = state.rideDataState,
+                        primaryBottom = HomeBSNavigation.RideRating
+                    )
+                }
+
+                RideStatus.START_TRIP.value -> {
+                    rideStartedBsState = rideStartedBsState.copy(
+                        rideId = (ride.rideId ?: 0).toString(),
+                        captainId = (ride.captainId ?: 0).toString(),
+                        captainName = (ride.rideCaptainName ?: 0).toString(),
+                        address = ride.pickupAddress ?: "",
+                        time = 3,
+                        ridePin = ride.otp ?: 0,
+                        driverName = ride.rideCaptainName ?: "",
+                        driverRating = ride.captainRating ?: 0.0,
+                        driverImg = ride.rideCaptainProfileImage ?: "",
+                        driverNumber = ride.rideCaptainPhone ?: "",
+                        carImg = "https://images.pexels.com/photos/2399254/pexels-photo-2399254.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
+                        carModel = ride.vehicleName ?: "",
+                        carNumber = ride.vehicleNumber ?: ""
+                    )
+                    state = state.copy(
+                        rideState = RideState.STARTED,
+                        rideDataState = state.rideDataState,
+                        rideStartedBsState = rideStartedBsState,
+                        primaryBottom = HomeBSNavigation.RideStared,
+                        isLoading = false
+                    )
+                    state = state.copy(
+                        isLoading = false,
+                        rideState = RideState.VERIFIED,
+                        showSecondaryBottomSheet = true,
+                        secondaryBottom = HomeSecondaryBSNavigation.RideVerified,
+                    )
+                }
+
+                RideStatus.END_TRIP.value -> {
+                    rideEndBsState = rideEndBsState.copy(
+                        rideId = (ride.rideId ?: 0).toString(),
+                        captainId = (ride.captainId ?: 0).toString(),
+                        captainName = (ride.rideCaptainName ?: 0).toString(),
+                        amount = (ride.total ?: 1).toString(),
+                    )
+
+                    state = state.copy(
+                        rideState = RideState.ENDED,
+                        rideDataState = state.rideDataState,
+                        rideEndBsState = rideEndBsState,
+                        primaryBottom = HomeBSNavigation.RideEnded,
+                        isLoading = false
+                    )
+                }
+
+                RideStatus.CANCELLED_BY_CAPTAIN.value -> {
+                    val mapState = mapState.copy(
+                        firstPoint = null,
+                        secondPoint = null,
+                        thirdPoint = null,
+                        route = emptyList(),
+                    )
+
+                    searchDestinationBsState = searchDestinationBsState.copy(
+                        destinationAddress = null,
+                    )
+                    rideDataState = RideDataState()
+
+                    state = state.copy(
+                        rideState = RideState.CANCELED,
+                        isLoading = false,
+                        showSecondaryBottomSheet = false,
+                        destinationLocation = null,
+                        mapState = mapState,
+                        rideDataState = rideDataState,
+                        searchDestinationBsState = searchDestinationBsState,
+                        primaryBottom = HomeBSNavigation.Initial
+                    )
+                }
+
+                RideStatus.PENDING.value -> {
+                    state = state.copy(
+                        rideState = RideState.FINDING
+                    )
+                }
+
+                else -> {}
+            }
+        }
+    }
+
+    private fun observeAtPickupPoint(reached: CaptainReachedResponse) {
+        reached.ride?.let { ride ->
+            rideDataState = rideDataState.copy(
+                rideId = ride.rideId ?: 0,
+                captainId = ride.captainId ?: 0
+            )
+
+            state = state.copy(
+                rideState = RideState.AT_POINT,
+                rideDataState = rideDataState,
+                bookingConfirmBsState = BookingConfirmBsState(
+                    rideId = (ride.rideId ?: 0).toString(),
+                    captainName = (ride.rideCaptainName ?: 0).toString(),
+                    captainId = (ride.captainId ?: 0).toString(),
+                    address = ride.pickupAddress ?: "",
+                    time = 3,
+                    ridePin = ride.otp ?: 0,
+                    driverName = ride.rideCaptainName ?: "",
+                    driverRating = ride.captainRating ?: 0.0,
+                    driverImg = ride.rideCaptainProfileImage ?: "",
+                    driverNumber = ride.rideCaptainPhone ?: "",
+                    carImg = "https://images.pexels.com/photos/2399254/pexels-photo-2399254.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
+                    carModel = ride.vehicleName ?: "",
+                    carNumber = ride.vehicleNumber ?: ""
+                ),
+                primaryBottom = HomeBSNavigation.BookingConfirm,
+                isLoading = false,
+                error = ride.rideStatusMsg ?: "Captain reached at your location",
+                showSecondaryBottomSheet = false,
+                mapState = mapState
+            )
+        }
+    }
+
+    private fun observeRideVerified(started: RideStartedResponse) {
+        started.ride?.let { ride ->
+            rideStartedBsState = rideStartedBsState.copy(
+                rideId = (ride.rideId ?: 0).toString(),
+                captainId = (ride.captainId ?: 0).toString(),
+                captainName = (ride.rideCaptainName ?: 0).toString(),
+                address = ride.pickupAddress ?: "",
+                time = 3,
+                ridePin = ride.otp ?: 0,
+                driverName = ride.rideCaptainName ?: "",
+                driverRating = ride.captainRating ?: 0.0,
+                driverImg = ride.rideCaptainProfileImage ?: "",
+                driverNumber = ride.rideCaptainPhone ?: "",
+                carImg = "https://images.pexels.com/photos/2399254/pexels-photo-2399254.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2",
+                carModel = ride.vehicleName ?: "",
+                carNumber = ride.vehicleNumber ?: ""
+            )
+            state = state.copy(
+                rideState = RideState.STARTED,
+                rideDataState = state.rideDataState,
+                rideStartedBsState = rideStartedBsState,
+                primaryBottom = HomeBSNavigation.RideStared,
+                isLoading = false
+            )
+            state = state.copy(
+                isLoading = false,
+                rideState = RideState.VERIFIED,
+                showSecondaryBottomSheet = true,
+                secondaryBottom = HomeSecondaryBSNavigation.RideVerified,
+            )
+        }
+
+    }
+
+    private fun observeBookingEndRide(dropped: RideDroppedResponse) {
+        dropped.ride?.let { ride ->
+            rideEndBsState = rideEndBsState.copy(
+                rideId = (ride.rideId ?: 0).toString(),
+                captainId = (ride.captainId ?: 0).toString(),
+                captainName = (ride.rideCaptainName ?: 0).toString(),
+                amount = (ride.total ?: 1).toString(),
+            )
+            state = state.copy(
+                rideState = RideState.ENDED,
+                rideDataState = state.rideDataState,
+                rideEndBsState = rideEndBsState,
+                primaryBottom = HomeBSNavigation.RideEnded,
+                isLoading = false
+            )
+        }
+    }
+
+    private fun observeBookingCompleted(completed: RideCompletedResponse) {
+        completed.ride?.let {
+            state = state.copy(
+                rideState = RideState.COMPLETED,
+                rideDataState = state.rideDataState,
+                primaryBottom = HomeBSNavigation.RideRating
+            )
+        }
+    }
+
+    private fun observeCaptainCurrentLocation(captainLocation: CaptainLocationResponse) {
+        mapState = mapState.copy(
+            captainLocation = captainLocation.toLocation()
+        )
+
+        state = state.copy(
+            mapState = mapState
+        )
+    }
+
+    private fun setPickupLocation(placeId: String) {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+
+            val response = placesRepository.getPlaceCoordinate(placeId)
+
+            when (response) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        isLoading = false,
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+
+                is Resource.Success -> {
+
+                    val location = response.data
+                    if (location == null) {
+                        state = state.copy(
+                            isLoading = false,
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        )
+                        return@launch
+                    }
+
+                    mapState = mapState.copy(
+                        firstPoint = location,
+                    )
+
+                    state = state.copy(
+                        pickupLocation = location,
+                        mapState = mapState,
+                        isLoading = false,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun setDestination(firstId: String, secondId: String?) {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+
+            val firstCoordinates = placesRepository.getPlaceCoordinate(firstId)
+
+            secondId?.let {
+
+                val secondCoordinates = placesRepository.getPlaceCoordinate(it)
+
+                when (secondCoordinates) {
+                    is Resource.Error -> {
+                        state = state.copy(
+                            isLoading = false,
+                            error = secondCoordinates.message ?: Messages.SOMETHING_WENT_WRONG,
+                            showSecondaryBottomSheet = false
+                        )
+                    }
+
+                    is Resource.Success -> {
+
+                        val location = secondCoordinates.data
+                        if (location == null) {
+                            state = state.copy(
+                                isLoading = false,
+                                error = secondCoordinates.message ?: Messages.SOMETHING_WENT_WRONG,
+                            )
+                            return@launch
+                        }
+
+                        state = state.copy(
+                            stoppageLocation = location,
+                        )
+
+                    }
+                }
+            }
+
+            when (firstCoordinates) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        isLoading = false,
+                        error = firstCoordinates.message ?: Messages.SOMETHING_WENT_WRONG,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+
+                is Resource.Success -> {
+
+                    val location = firstCoordinates.data
+                    if (location == null) {
+                        state = state.copy(
+                            isLoading = false,
+                            error = firstCoordinates.message ?: Messages.SOMETHING_WENT_WRONG,
+                        )
+                        return@launch
+                    }
+
+                    state = state.copy(
+                        destinationLocation = location,
+                    )
+
+                    findRoute()
+                }
+            }
+        }
+    }
+
+    private fun getNearbyCaptains(location: Location) {
+        viewModelScope.launch {
+            printLog("userId  " + "${API.SOCKET_EVENT}${localStorageManager.getUserId()}")
+            socketRepo.getNearbyCaptains(location.lat, location.lng, 100000.00)
+        }
+    }
+
+    private fun getAvailableRides() {
+        viewModelScope.launch {
+//            state = state.copy(
+//                isLoading = true,
+//                error = null
+//            )
+
+            when (val response = socketRepo.getRideTypes()) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+
+                is Resource.Success -> {
+
+                    val rides = response.data
+                    if (rides == null) {
+                        state = state.copy(
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                            showSecondaryBottomSheet = false
+                        )
+                        return@launch
+                    }
+
+                    searchDestinationBsState = searchDestinationBsState.copy(
+                        tripType = rides,
+                        selectedTripType = rides.firstOrNull(),
+                    )
+
+                    state = state.copy(
+                        searchDestinationBsState = searchDestinationBsState,
+                        primaryBottom = HomeBSNavigation.Initial,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun getRideCancelReasons() {
+        viewModelScope.launch {
+            when (val response = socketRepo.getCancelReasons()) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+
+                is Resource.Success -> {
+                    val reasons = response.data
+                    if (reasons == null) {
+                        state = state.copy(
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                            showSecondaryBottomSheet = false
+                        )
+                        return@launch
+                    }
+
+                    cancelRideBsState = cancelRideBsState.copy(
+                        cancelReasons = reasons,
+                        selectedReason = reasons.firstOrNull()
+                    )
+
+                    state = state.copy(
+                        cancelRideBsState = cancelRideBsState,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun submitRating(rating: Double) {
+        viewModelScope.launch {
+            rideDataState = state.rideDataState
+
+            val basePayload = BaseSubmitRideRatingPayload(
+                remark = rating,
+                comment = ""
+            )
+            val payload = SubmitRideRatingPayload(
+                rideId = state.rideDataState.rideId.toString(),
+                captainId = state.rideDataState.captainId.toString(),
+                basePayload = basePayload
+            )
+
+            when (val response = socketRepo.submitRating(payload)) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+
+                is Resource.Success -> {
+                    backToInitialState()
+                }
+            }
+        }
+    }
+
+    private fun backToInitialState() {
+        val mapState = mapState.copy(
+            firstPoint = null,
+            secondPoint = null,
+            thirdPoint = null,
+            route = emptyList(),
+        )
+        searchDestinationBsState = searchDestinationBsState.copy(
+            destinationAddress = null,
+        )
+        state = state.copy(
+            myLocation = null,
+            destinationLocation = null,
+            stoppageLocation = null,
+            searchDestinationBsState = searchDestinationBsState,
+            primaryBottom = HomeBSNavigation.Initial,
+            secondaryBottom = null,
+            rideForState = RideForState(),
+            rideDataState = RideDataState(),
+            rideState = RideState.REST,
+
+            error = null,
+            isLoading = false,
+            locationError = null,
+
+            showSecondaryBottomSheet = false,
+            mapState = mapState
+        )
+    }
+
+    private fun findRidesNearMe() {
+        viewModelScope.launch {
+            if (state.destinationLocation != null && state.pickupLocation != null) {
+                when (val response = socketRepo.checkCabsForRide(
+                    distance = chooseRideBsState.totalDistance,
+                    dropLocation = state.destinationLocation!!,
+                    pickupLocation = state.pickupLocation!!,
+                    radius = 5000,
+                    couponCode = state.couponCode?.couponCode ?: "",
+                    vehicleTypeId = searchDestinationBsState.selectedTripType?.id ?: -1
+                )) {
+                    is Resource.Error -> {
+                        state = state.copy(
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                            showSecondaryBottomSheet = false
+                        )
+                    }
+
+                    is Resource.Success -> {
+                        val data = response.data
+                        if (data?.status != 200) {
+                            state = state.copy(
+                                error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                                showSecondaryBottomSheet = false
+                            )
+                        }
+
+                        data?.let {
+                            val rides = it.vehicleTypes?.map { vehicleType ->
+                                vehicleType.toRideType()
+                            } ?: emptyList()
+
+                            val gateways = it.paymentGateways?.map { gateway ->
+                                gateway.toPaymentMethod()
+                            } ?: emptyList()
+
+                            val coupons = it.coupons?.map { coupon ->
+                                coupon.toPaymentCoupon()
+                            } ?: emptyList()
+
+                            chooseRideBsState = chooseRideBsState.copy(
+                                allRides = rides,
+                                selectedRideType = rides.firstOrNull(),
+                                selectedPaymentOption = gateways.firstOrNull()
+                                    ?: PaymentMethods.getCashMethod(),
+                                paymentOptions = gateways,
+                                coupons = coupons,
+                                disclaimer = it.topMsg ?: ""
+                            )
+
+                            state = state.copy(
+                                isLoading = false,
+                                rideState = RideState.CHOOSE,
+                                chooseRideBsState = chooseRideBsState,
+                                primaryBottom = HomeBSNavigation.ChooseRide,
+                                rideForState = rideForBsState
+                            )
+                        }
+                    }
+                }
+            } else {
+                state = state.copy(
+                    isLoading = false,
+                    error = "Something went wrong! Please try selecting ride locations again",
+                )
+            }
+        }
+    }
+
+    private fun createSession() {
+        viewModelScope.launch {
+            val payload = CreateSessionPayload(
+                fcmToken = "wer3",
+                authToken = localStorageManager.getToken() ?: "",
+                lat = (state.myLocation?.lat ?: 0.0).toString(),
+                lng = (state.myLocation?.lng ?: 0.0).toString(),
+                deviceId = getDeviceId(application.applicationContext),
+                deviceType = "android",
+                deviceName = getDeviceName(),
+                type = /*if (localStorageManager.isSessionSaved())
+                    CreateSessionType.UPDATE.value
+                else*/
+                CreateSessionType.INSERT.value
+            )
+
+            when (val response = socketRepo.createSession(payload)) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+
+                is Resource.Success -> {
+                    val data = response.data
+                    if (data == null) {
+                        state = state.copy(
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                            showSecondaryBottomSheet = false
+                        )
+                        return@launch
+                    }
+                    localStorageManager.saveSession(true)
+                }
+            }
+        }
+    }
+
+    private fun getMyCurrentLocation() {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null,
+            )
+            val currentLocation = locationTracker.getCurrentLocation()
+            try {
+                when (currentLocation) {
+                    is Resource.Error -> {
+                        state = state.copy(
+                            isLoading = false,
+                            error = currentLocation.message,
+                        )
+                    }
+
+                    is Resource.Success -> {
+                        val location = currentLocation.data
+
+                        if (location == null) {
+                            state = state.copy(
+                                isLoading = false,
+                                error = currentLocation.message
+                            )
+                            return@launch
+                        }
+
+                        getNearbyCaptains(location)
+                        getCurrentBooking()
+
+                        mapState = mapState.copy(
+                            myLocation = location,
+                        )
+
+                        state = state.copy(
+                            isLoading = false,
+                            pickupLocation = location,
+                            myLocation = location,
+                            mapState = mapState
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                state = state.copy(
+                    isLoading = false,
+                    error = currentLocation.message
+                )
+            }
+        }
+    }
+
+    private fun chooseRide(rideType: RideType) {
+        viewModelScope.launch {
+            socketRepo.bookRide(
+                tripTypeId = searchDestinationBsState.selectedTripType!!.id.toString(),
+                distance = chooseRideBsState.totalDistance.toString(),
+                pickupLocation = state.pickupLocation!!,
+                user = rideForBsState.selectedUser,
+                dropLocation = state.destinationLocation!!,
+                ridePath = mapState.ridePath,
+                isForMe = rideForBsState.isForMe,
+                totalFare = rideType.discountPrice?.toDoubleOrNull() ?: rideType.price.toDouble(),
+                tripDuration = chooseRideBsState.duration,
+                rideTypeId = rideType.vehicleTypeId.toString(),
+                vehicleTypeId = rideType.vehicleTypeId,
+                paymentMethods = chooseRideBsState.selectedPaymentOption!!,
+                usedWalletAmount = 0,
+            )
+        }
+    }
+
+    private fun cancelRide(cancelReason: CancelReason) {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+            )
+
+            socketRepo.cancelRide(
+                rideDataState.rideId.toString(),
+                rideDataState.captainId.toString(),
+                localStorageManager.getUserId().toString(),
+                cancelReason.id
+            )
+        }
+    }
+
+    private fun findRoute(
+        startPoint: Location = state.pickupLocation!!,
+        endPoint: Location = state.destinationLocation!!,
+//        thirdPoint: Location? = state.stoppageLocation
+    ) {
+
+        viewModelScope.launch {
+
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+
+            val response = placesRepository.getRoute(
+                firstPoint = startPoint,
+                secondPoint = null,
+                thirdPoint = endPoint
+            )
+
+            when (response) {
+                is Resource.Error -> {
+                    state = state.copy(
+                        isLoading = false,
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                    )
+                }
+
+                is Resource.Success -> {
+
+                    if (response.data == null) {
+                        state = state.copy(
+                            isLoading = false,
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        )
+                        return@launch
+                    }
+
+                    val data = response.data
+
+                    mapState = mapState.copy(
+                        firstPoint = startPoint,
+                        secondPoint = endPoint,
+                        thirdPoint = null,
+                        route = data.route,
+                        ridePath = data.ridePath
+                    )
+
+                    chooseRideBsState = chooseRideBsState.copy(
+                        totalDistance = data.distance,
+                        duration = data.duration
+                    )
+
+                    state = state.copy(
+                        isLoading = false,
+                        pickupLocation = startPoint,
+                        mapState = mapState,
+                        chooseRideBsState = chooseRideBsState,
+                    )
+
+                    findRidesNearMe()
+                }
+            }
+        }
+    }
+
+    private fun getAvailableAddressesToBeSaved() {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+            val addresses = placesRepository.getAvailableAddressType()
+            printLog("addressesToBeSaved  $addresses")
+            state = state.copy(
+                isLoading = false,
+                placeSaved = false,
+                showSecondaryBottomSheet = true,
+                addressesToBeSaved = addresses,
+                secondaryBottom = HomeSecondaryBSNavigation.AddPlaces
+            )
+        }
+    }
+
+    private fun addPlace(
+        name: String,
+        type: AddressType,
+        place: Place = Place(
+            address = state.pickupLocation!!.address,
+            name = name,
+            type = type,
+            latLng = state.pickupLocation!!.toLatLng()
+        )
+    ) {
+        viewModelScope.launch {
+            state = state.copy(
+                isLoading = true,
+                error = null
+            )
+
+            val response = placesRepository.addPlace(place)
+
+            state = when (response) {
+                is Resource.Error -> {
+                    state.copy(
+                        isLoading = false,
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+
+                is Resource.Success -> {
+                    state.copy(
+                        isLoading = false,
+                        placeSaved = true,
+                        showSecondaryBottomSheet = false
+                    )
+                }
+            }
+        }
+    }
+
+    private fun getChatHistory(chatIntent: ChatIntent.GetChatHistory) {
+        viewModelScope.launch {
+            val reqMap = HashMap<String, Any>()
+            reqMap["ride_id"] = chatIntent.payload.rideId
+            reqMap["captain_id"] = chatIntent.payload.captainId
+            reqMap["customer_id"] = localStorageManager.getUserId() ?: -1
+
+            when (val response = chatRepository.getChatMessages(reqMap)) {
+
+                is Resource.Error -> {
+                    chatState = chatState.copy(
+                        isLoading = false,
+                        error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                    )
+                }
+
+                is Resource.Success -> {
+                    val data = response.data
+                    printLog("data ${Gson().toJson(data)}")
+                    if (data == null) {
+                        chatState = chatState.copy(
+                            isLoading = false,
+                            error = response.message ?: Messages.SOMETHING_WENT_WRONG,
+                        )
+                        return@launch
+                    }
+
+                    printLog("connection ${Gson().toJson(response.data.connection)}")
+
+                    chatState = chatState.copy(
+                        isLoading = false,
+                        error = null,
+                        message = "",
+                        chatMessages = response.data.messages ?: arrayListOf(),
+                        connection = response.data.connection ?: Connection()
+                    )
+                }
+            }
+        }
+    }
+
+    private fun sendMessage(captainId: String) {
+        viewModelScope.launch {
+            socketRepo.sendMessage(
+                connectionId = chatState.connection.connectionId ?: 0,
+                senderId = localStorageManager.getUserId() ?: -1,
+                receiverId = if (captainId.isNotEmpty()) captainId.toInt() else 0,
+                messageType = MessageType.Text.value,
+                message = chatState.message,
+                createdAt = System.currentTimeMillis().toString(),
+                isSendByCustomer = true
+            )
+        }
+    }
+
+    private fun observeSendMessage(messageSent: SendMessageResponse) {
+        val chatMessages = mutableListOf<ChatMessage>().apply {
+            addAll(chatState.chatMessages)
+            add(messageSent.message ?: ChatMessage())
+        }
+
+        chatState = chatState.copy(
+            isLoading = false,
+            error = null,
+            message = "",
+            chatMessages = chatMessages
+        )
+    }
+
+    private fun checkLocationPermissions(): Boolean {
+        if (!hasAccessCoarseLocationPermission(application)) {
+            state = state.copy(locationError = LocationErrorState.NO_COARSE)
+            return false
+        }
+        if (!hasAccessFineLocationPermission(application)) {
+            state = state.copy(locationError = LocationErrorState.NO_FINE)
+            return false
+        }
+        if (!isGpsEnabled(application)) {
+            state = state.copy(locationError = LocationErrorState.NO_GPS)
+            return false
+        }
+        state = state.copy(locationError = LocationErrorState.NONE)
+        return true
+    }
+}
