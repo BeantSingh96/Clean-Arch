@@ -1,0 +1,34 @@
+package com.katto.place.data.remote.model
+
+import com.katto.booking.data.remote.model.AddLocationPayload
+import com.katto.booking.data.remote.model.AddLocationResponse
+import com.katto.booking.data.remote.model.SingleLocationResponse
+import com.katto.core.data.model.BaseResponse
+import retrofit2.http.Body
+import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.Path
+
+interface PlacesApi {
+
+    @GET("customer/get_saved_locations/{userId}")
+    suspend fun getSavedLocation(
+        @Path("userId") userId: Int,
+    ): BaseResponse<List<SingleLocationResponse>>
+
+    @POST("customer/save_location")
+    suspend fun addLocation(
+        @Body addLocationPayload: AddLocationPayload
+    ): BaseResponse<AddLocationResponse>
+
+    //TODO Update this
+    @POST("customer/save_location")
+    suspend fun updateLocation(
+        @Body addLocationPayload: AddLocationPayload
+    ): BaseResponse<AddLocationResponse>
+
+}
+
+
+
+
