@@ -1,0 +1,18 @@
+package com.katto.auth.mappers
+
+import com.katto.auth.data.remote.model.ProfileResponse
+import com.katto.auth.domain.auth.UserInfo
+import com.katto.core.mapper.toGender
+
+fun ProfileResponse.toUserInfo(): UserInfo {
+    return UserInfo(
+        id = customerId!!,
+        name = name ?: "",
+        address = address ?: "",
+        countryCode = countryCode ?: "",
+        email = email ?: "",
+        profileImage = profileImage ?: "",
+        gender = gender?.toIntOrNull().toGender(),
+        phone = phone ?: ""
+    )
+}
