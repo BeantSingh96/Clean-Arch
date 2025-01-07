@@ -1,0 +1,281 @@
+package com.katto.place.data.remote.repository
+
+import android.util.Log
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.libraries.places.api.Places
+import com.google.android.libraries.places.api.model.AutocompleteSessionToken
+import com.google.android.libraries.places.api.net.FindAutocompletePredictionsRequest
+import com.google.android.libraries.places.api.net.FindAutocompletePredictionsResponse
+import com.google.android.libraries.places.api.net.PlacesClient
+import com.google.gson.Gson
+import com.google.maps.android.PolyUtil
+import com.katto.auth.domain.repository.LocalStorageManager
+import com.katto.booking.domain.location.model.Location
+import com.katto.booking.domain.location.model.toLatLng
+import com.katto.core.data.jsonToErrorResponse
+import com.katto.core.data.parser.JsonParser
+import com.katto.core.domain.util.Resource
+import com.katto.core.utils.Messages
+import com.katto.core.utils.Params
+import com.katto.core.utils.printLog
+import com.katto.place.data.remote.GooglePlaceApi
+import com.katto.place.data.remote.model.PlacesApi
+import com.katto.place.domain.destination.Address
+import com.katto.place.domain.model.AddressType
+import com.katto.place.domain.model.Place
+import com.katto.place.domain.model.RouteData
+import com.katto.place.domain.repository.PlacesRepository
+import com.katto.place.mapper.toAddLocationPayload
+import com.katto.place.mapper.toLocation
+import com.katto.place.uttils.createLocationBias
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.suspendCancellableCoroutine
+import javax.inject.Inject
+import kotlin.coroutines.resume
+
+
+class PlacesRepositoryImpl @Inject constructor(
+    private val api: PlacesApi,
+    private val googlePlaceApi: GooglePlaceApi,
+    private val localStorageManager: LocalStorageManager,
+    private val jsonParser: JsonParser,
+    private val placesClient: PlacesClient
+) : PlacesRepository {
+
+    override suspend fun getAddressPredictions(
+        inputString: String,
+        location: Location,
+        radius: Double
+    ): Resource<List<Address>> {
+        val token = AutocompleteSessionToken.newInstance()
+
+        val request = FindAutocompletePredictionsRequest.builder()
+            .setLocationRestriction(createLocationBias(location.toLatLng(), radius))
+            .setOrigin(location.toLatLng())
+            .setCountries("IND")
+            .setTypesFilter(
+                listOf(
+//                        PlaceTypes.NEIGHBORHOOD,
+//                        PlaceTypes.SUBLOCALITY,
+//                        PlaceTypes.SUBLOCALITY_LEVEL_1
+                )
+            )
+            .setSessionToken(token)
+            .setQuery(inputString)
+            .build()
+        return suspendCancellableCoroutine { cont ->
+            placesClient.findAutocompletePredictions(request)
+                .addOnSuccessListener { response: FindAutocompletePredictionsResponse ->
+                    val addresses = response.autocompletePredictions.map {
+                        printLog("addresses ${Gson().toJson(it)}")
+                        Address(
+                            id = it.placeId,
+                            distance = (it.distanceMeters ?: 0) / 1000,
+                            unit = "Km",
+                            locality = it.getPrimaryText(null).toString(),
+                            address = it.getSecondaryText(null).toString(),
+                            fullAddress = it.getFullText(null).toString()
+                        )
+                    }
+                    cont.resume(Resource.Success(addresses))
+                }.addOnFailureListener { exception ->
+                    printLog("error ${exception.message}")
+                    exception.printStackTrace()
+                    cont.resume(
+                        Resource.Error(
+                            message = exception.message ?: "Error while fetching location"
+                        )
+                    )
+                }.addOnCanceledListener {
+                    cont.cancel()
+                }
+        }
+    }
+
+    override suspend fun getPlaceCoordinate(placeId: String): Resource<Location> {
+        return try {
+
+            val response = googlePlaceApi.getPlaceDetails(placeId, Params.GOOGLE_API)
+
+            val data = response.body()
+
+            when {
+                (data == null || !response.isSuccessful) -> {
+                    val errorBody = response.errorBody()
+                    val error = errorBody?.jsonToErrorResponse(jsonParser)
+                    Resource.Error(
+                        message = error?.msg ?: Messages.SOMETHING_WENT_WRONG,
+                        data = null
+                    )
+                }
+
+                data.result == null -> {
+                    Resource.Error(
+                        message = data.error ?: Messages.SOMETHING_WENT_WRONG,
+                        data = null
+                    )
+                }
+
+                else -> {
+                    Resource.Success(data = data.toLocation())
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+    override suspend fun getAllPlaces(): Resource<List<Place>> {
+        return try {
+
+            val response = api.getSavedLocation(
+                localStorageManager.getUserId()!!
+            )
+
+            when {
+                response.data == null -> {
+                    Resource.Error(
+                        message = response.msg ?: Messages.SOMETHING_WENT_WRONG,
+                        data = null
+                    )
+                }
+
+                else -> {
+                    val places = response.data.map { it.toPlaces() }
+                    saveAllRemainingAddressType(places)
+                    Resource.Success(places)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+    private suspend fun saveAllRemainingAddressType(places: List<Place>) {
+        val savedAddress = places.map { it.type }.toSet()
+        val allAddress = AddressType.entries.toSet()
+        val remainingAddress = allAddress - savedAddress
+        remainingAddress.toMutableSet().add(AddressType.OTHER)
+        localStorageManager.saveRemainingAddressType(remainingAddress)
+    }
+
+    override suspend fun getAvailableAddressType(): Set<AddressType> {
+        val availableTypes =
+            localStorageManager.getRemainingAddressType().firstOrNull() ?: emptySet()
+        return availableTypes.toMutableSet().apply { add(AddressType.OTHER) }
+    }
+
+    override suspend fun addPlace(place: Place): Resource<Nothing> {
+        return try {
+            val response = api.addLocation(
+                place.toAddLocationPayload(localStorageManager.getUserId()!!)
+            )
+
+            when {
+                response.data == null -> {
+                    Resource.Error(
+                        message = response.msg ?: Messages.SOMETHING_WENT_WRONG,
+                        data = null
+                    )
+                }
+
+                else -> {
+                    getAllPlaces()
+                    Resource.Success()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+    //TODO Update Location pending
+    override suspend fun updatePlace(place: Place): Resource<Place> {
+        return try {
+            val response = api.addLocation(
+                place.toAddLocationPayload(localStorageManager.getUserId()!!)
+            )
+
+            when {
+                response.data == null -> {
+                    Resource.Error(
+                        message = response.msg ?: Messages.SOMETHING_WENT_WRONG,
+                        data = null
+                    )
+                }
+
+                else -> {
+                    Resource.Success()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+    /*  override suspend fun getAvailableAddressType(): Set<AddressType> {
+          val availableType = localStorageManager.getRemainingAddressType().first() ?: emptySet()
+          availableType.toMutableSet().add(AddressType.OTHER)
+          return availableType
+      }*/
+
+
+    override suspend fun getRoute(
+        firstPoint: Location,
+        secondPoint: Location?,
+        thirdPoint: Location,
+    ): Resource<RouteData> {
+        return try {
+
+            val response = googlePlaceApi.getRoute(
+                origin = firstPoint.getLatLng().joinToString(","),
+                destination = thirdPoint.getLatLng().joinToString(","), Params.GOOGLE_API
+            )
+
+            val data = response.body()
+
+            when {
+                (data == null || !response.isSuccessful) -> {
+                    val errorBody = response.errorBody()
+                    val error = errorBody?.jsonToErrorResponse(jsonParser)
+                    Resource.Error(
+                        message = error?.msg ?: Messages.SOMETHING_WENT_WRONG,
+                        data = null
+                    )
+                }
+
+                data.routes == null -> {
+                    Resource.Error(
+                        message = data.error ?: Messages.SOMETHING_WENT_WRONG,
+                        data = null
+                    )
+                }
+
+                else -> {
+                    data.routes.firstOrNull()!!.let {
+                        val route = PolyUtil.decode(it.overviewPolyline!!.points)
+                        val distance = it.legs!!.first().distance!!.value!!
+                        val duration = it.legs.first().duration!!.value!!
+
+                        val routeData = RouteData(
+                            route = route,
+                            distance = distance,
+                            duration = duration,
+                            ridePath = it.overviewPolyline.points ?: ""
+                        )
+                        Resource.Success(data = routeData)
+
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Resource.Error(e.message ?: Messages.UNKNOWN_ERROR)
+        }
+    }
+
+}
